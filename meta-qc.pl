@@ -28,6 +28,7 @@ my $derep        = 0;
 my $check_qc     = 0;
 my $make_fasta   = 0;
 my $compress     = 0;
+my $paired_end   = 0;
 
 GetOptions(
     "i=s" => \$masterdir,
@@ -41,6 +42,7 @@ GetOptions(
     "check-qc"    => \$check_qc,
     "make-fasta"  => \$make_fasta,
     "compress"    => \$compress,
+    "paired-end"  => \$paired_end,
     );
 
 if( ! defined( $logdir ) ){
@@ -74,6 +76,7 @@ if( $run_fastqc ){
 	log_dir     => $fastq_log_dir, 
 	nprocs      => $nprocs,
 	fastqc      => $fastqc,
+	paired_end  => $paired_end,
 		 });
 }
 
@@ -103,6 +106,7 @@ if( $run_bmtagger ){
 	db_names    => \@db_names,
 	extract     => $extract,
 	overwrite   => $overwrite,
+	paired_end  => $paired_end,
 		   });
 }
 
@@ -123,6 +127,7 @@ if( $run_prinseq ){
 	nprocs     => $nprocs,
 	overwrite  => $overwrite,
 	derep      => 0,
+	paired_end => $paired_end,
 		  });
 }
 
@@ -140,6 +145,7 @@ if( $cat_reads ){
 	log_dir    => $cat_reads_log,
 	result_dir => $cat_reads_dir,
 	nprocs     => $nprocs,	
+	paired_end => $paired_end,
 		});
 }
 
@@ -179,6 +185,7 @@ if( $check_qc ){
 	nprocs      => 1,
 	fastqc      => $fastqc,
 	is_clean_check => 1,
+	paired_end  => $paired_end,
 		 });
 }
 
@@ -313,7 +320,8 @@ sub _run_fastqc{
     my $nprocs     = $args->{"nprocs"};
     my $fastqc     = $args->{"fastqc"};
     my $is_clean   = $args->{"is_clean_check"};
-    
+    my $paired_end = $args->{"paired_end"};
+
     #forward reads
     my $pm = Parallel::ForkManager->new($nprocs);
     for( my $i=1; $i<=$nprocs; $i++ ){
@@ -343,26 +351,28 @@ sub _run_fastqc{
     $pm->wait_all_children;    
     #reverse reads
     return if ( defined( $is_clean ) && $is_clean );
-    my $pm2 = Parallel::ForkManager->new($nprocs);
-    for( my $i=1; $i<=$nprocs; $i++ ){
-	my $pid = $pm2->start and next;
-	my $cmd;
-	#do some housekeeping
-	my $read = $reads[$i-1];
-	my $f_mate = $read;
-	my $r_mate = $read;
-	$r_mate =~ s/\_R1\_/\_R2\_/;
-	my $f_in  = File::Spec->catfile( $in_dir, $f_mate . ".fastq.gz" );
-	my $r_in  = File::Spec->catfile( $in_dir, $r_mate . ".fastq.gz" );
-	my $f_log = File::Spec->catfile( $log_dir, $f_mate . ".log" );
-	my $r_log = File::Spec->catfile( $log_dir, $r_mate . ".log" );
-	#Start threads
-	$cmd = "$fastqc -o=$result_dir $r_in > $r_log 2>&1";
-	print "$cmd\n";
-	system( $cmd );
-	$pm2->finish; # Terminates the child process
+    if( $paired_end ){
+	my $pm2 = Parallel::ForkManager->new($nprocs);
+	for( my $i=1; $i<=$nprocs; $i++ ){
+	    my $pid = $pm2->start and next;
+	    my $cmd;
+	    #do some housekeeping
+	    my $read = $reads[$i-1];
+	    my $f_mate = $read;
+	    my $r_mate = $read;
+	    $r_mate =~ s/\_R1\_/\_R2\_/;
+	    my $f_in  = File::Spec->catfile( $in_dir, $f_mate . ".fastq.gz" );
+	    my $r_in  = File::Spec->catfile( $in_dir, $r_mate . ".fastq.gz" );
+	    my $f_log = File::Spec->catfile( $log_dir, $f_mate . ".log" );
+	    my $r_log = File::Spec->catfile( $log_dir, $r_mate . ".log" );
+	    #Start threads
+	    $cmd = "$fastqc -o=$result_dir $r_in > $r_log 2>&1";
+	    print "$cmd\n";
+	    system( $cmd );
+	    $pm2->finish; # Terminates the child process
+	}
+	$pm2->wait_all_children;    
     }
-    $pm2->wait_all_children;    
 }
 
 sub _run_bmtagger{
@@ -380,6 +390,7 @@ sub _run_bmtagger{
     my $overwrite   = $args->{"overwrite"};
     my $tmp_dir     = $args->{"tmp_dir"};
     my $bmtagger    = $args->{"bmtagger"};
+    my $paired_end  = $args->{"paired_end"};
 
     my $pm = Parallel::ForkManager->new($nprocs);
     for( my $i=1; $i<=$nprocs; $i++ ){
@@ -416,14 +427,22 @@ sub _run_bmtagger{
 		$cmd .= "-X ";
 		#$cmd .= "-b $bitmask -x $srprism -T $tmp_dir -d $database ";
 		$cmd .= "-b $bitmask -x $srprism -d $database ";
-		$cmd .= "-q 1 $f_string $r_string -o $out_path"; 
+		if( $paired_end ){
+		    $cmd .= "-q 1 $f_string $r_string -o $out_path"; 
+		} else {
+		    $cmd .= "-q 1 $f_string -o $out_path" ;
+		}
 	    }
 	    else{
                 #bmtagger.sh -b $BITMASK -x $SPRISM -T $TMP -q1 $FREAD $RREAD -o $OUTPUT  >> $LOGS/bmtagger/${JOB_ID}.all 2>&1
 #		$cmd = "run_bmtagger.sh -b $bitmask -x $sprism -T $tmp_dir -q1 $f_string $r_string -o $out_path > $f_log 2>&1";
 		$cmd =  "$bmtagger ";
 		$cmd .= "-b $bitmask -x $srprism -T $tmp_dir -d $database ";
-		$cmd .= "-q 1 $f_string $r_string -o $out_path"; 
+		if( $paired_end ){
+		    $cmd .= "-q 1 $f_string $r_string -o $out_path"; 
+		} else {
+		    $cmd .= "-q 1 $f_string -o $out_path"; 
+		}
 	    }
 	    $cmd .= " &> $f_log";
 	    print "$cmd\n";
@@ -445,6 +464,7 @@ sub _run_prinseq{
     my $overwrite   = $args->{"overwrite"};
     my $prinseq     = $args->{"prinseq"};
     my $derep       = $args->{"derep"};
+    my $paired_end  = $args->{"paired_end"};
 
     if( ! $derep ){
 	my $pm = Parallel::ForkManager->new($nprocs);
@@ -470,7 +490,11 @@ sub _run_prinseq{
 	    $cmd =  "$prinseq -verbose -derep 14 -derep_min 2 -no_qual_header "; #do we want -exact_only?
 	    $cmd .= "-min_len 60 -max_len 200 -min_qual_mean 25 -ns_max_n 0 ";
 	    $cmd .= "-lc_method entropy -lc_threshold 60 -trim_qual_left 20 -trim_qual_right 20 ";
-	    $cmd .= "-out_good $out_path -fastq $f_in -fastq2 $r_in -log $f_log ";
+	    if( $paired_end ){
+		$cmd .= "-out_good $out_path -fastq $f_in -fastq2 $r_in -log $f_log ";
+	    } else {
+		$cmd .= "-out_good $out_path -fastq $f_in -log $f_log ";
+	    }
 	    $cmd .= "-out_bad null ";
 	    print "$cmd\n";
 	    system( $cmd );
@@ -499,6 +523,7 @@ sub _run_prinseq{
 sub _cat_reads{
     my( $args ) = shift;
     my $in_dir  = $args->{"in_dir"};
+    my $paired_end = $args->{"paired_end"};
     my @reads   = @{ $args->{"file_names"} };
     @reads      = map { s/\_R1\_/\_RX\_/; $_ } @reads;
     my $log_dir = $args->{"log_dir"};
@@ -510,6 +535,11 @@ sub _cat_reads{
     my $out_stem   = $reads[0];
     $out_stem =~ s/\_RX.*$/\.fastq/; #bmtagger appends it's own mate pair id, we no longer need this one
     my $out_path = File::Spec->catfile( $result_dir, $out_stem );
-    print("cat @f_sorted @r_sorted > $out_path\n");
-    system("cat @f_sorted @r_sorted > $out_path");
+    if( $paired_end ){
+	print("cat @f_sorted @r_sorted > $out_path\n");
+	system("cat @f_sorted @r_sorted > $out_path");
+    } else {
+	print("cat @f_sorted > $out_path\n");
+	system("cat @f_sorted > $out_path");
+    }
 }
