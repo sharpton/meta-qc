@@ -29,6 +29,7 @@ my $check_qc     = 0;
 my $make_fasta   = 0;
 my $compress     = 0;
 my $paired_end   = 0;
+my $entire_pipe  = 0;
 
 GetOptions(
     "i=s" => \$masterdir,
@@ -43,7 +44,17 @@ GetOptions(
     "make-fasta"  => \$make_fasta,
     "compress"    => \$compress,
     "paired-end"  => \$paired_end,
+    "complete"    => \$entire_pipe, #note: does not invoke --compress
     );
+
+if( $entire_pipe ){
+    $run_bmtagger = 1;
+    $run_prinseq  = 1;
+    $cat_reads    = 1;
+    $derep        = 1;
+    $check_qc     = 1;
+    $make_fasta   = 1;
+}
 
 if( ! defined( $logdir ) ){
     $logdir    = $masterdir . "/logs/";
