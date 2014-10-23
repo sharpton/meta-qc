@@ -485,9 +485,15 @@ sub _run_prinseq{
 	    #do some housekeeping
 	    my $read = $reads[$i-1];          
 	    $read =~ s/\_R1\_/\_RX\_/; #bmtagger appends it's own mate pair id, we no longer need this one
-	    my $f_mate = $read . ".bmtagged_1.fastq";
-	    my $r_mate = $read . ".bmtagged_2.fastq";
-	    $r_mate =~ s/\_bmtagged_1\_/\_bmtagged_2\_/;
+	    my ( $f_mate, $r_mate );
+	    if( $paired_end ){
+		$f_mate = $read . ".bmtagged_1.fastq";
+	        $r_mate = $read . ".bmtagged_2.fastq";
+		$r_mate =~ s/\_bmtagged_1\_/\_bmtagged_2\_/;
+	    } else {
+		$f_mate = $read . ".bmtagged.fastq";
+	        $r_mate = $read . ".bmtagged.fastq"; #we don't actually call this below
+	    }
 	    my $f_in  = File::Spec->catfile( $in_dir, $f_mate );
 	    my $r_in  = File::Spec->catfile( $in_dir, $r_mate );
 	    my $f_log = File::Spec->catfile( $log_dir, $f_mate . ".log" );
