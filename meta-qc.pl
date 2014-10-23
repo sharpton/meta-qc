@@ -547,8 +547,15 @@ sub _cat_reads{
     my $result_dir = $args->{"result_dir"};
     my @sorted     = sort( @reads );    
     @sorted        = map { $in_dir . "/" . $_ } @sorted;
-    my @f_sorted   = map { $_ . ".trim_filter_1.fastq" } @sorted;
-    my @r_sorted   = map { $_ . ".trim_filter_2.fastq" } @sorted;
+    my @f_sorted   = ();
+    my @r_sorted   = ();
+    if( $paried_end ) {
+	@f_sorted   = map { $_ . ".trim_filter_1.fastq" } @sorted;
+	@r_sorted   = map { $_ . ".trim_filter_2.fastq" } @sorted;
+    } else {
+	@f_sorted   = map { $_ . ".trim_filter.fastq" } @sorted;
+	@r_sorted   = map { $_ . ".trim_filter.fastq" } @sorted; #this never actually gets used
+    }
     my $out_stem   = $reads[0];
     $out_stem =~ s/\_RX.*$/\.fastq/; #bmtagger appends it's own mate pair id, we no longer need this one
     my $out_path = File::Spec->catfile( $result_dir, $out_stem );
