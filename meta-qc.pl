@@ -20,9 +20,11 @@ my $bmtagger  = "/home/micro/sharptot/bin/bmtagger.sh";
 my $fastqc    = "/home/micro/sharptot/bin/fastqc";
 my $prinseq   = "/home/micro/sharptot/bin/prinseq-lite.pl";
 my $seqret    = "/local/cluster/bin/seqret";
+my $deconseq  = "/home/micro/sharptot/bin/deconseq.pl";
 my $run_fastqc = 0;
 my $run_bmtagger = 0;
 my $run_prinseq  = 0;
+my $run_deconseq = 0;
 my $cat_reads    = 0;
 my $derep        = 0;
 my $check_qc     = 0;
@@ -32,11 +34,12 @@ my $paired_end   = 0;
 my $entire_pipe  = 0;
 
 GetOptions(
-    "i=s" => \$masterdir,
+    "i=s"         => \$masterdir,
     "log-dir:s"   => \$logdir,
     "nprocs=i"    => \$nprocs,
     "fastqc"      => \$run_fastqc,
-    "host-filter" => \$run_bmtagger,
+    "bmtagger"    => \$run_bmtagger,
+    "deconseq"    => \$run_deconseq,
     "qc"          => \$run_prinseq,
     "cat"         => \$cat_reads,
     "derep"       => \$derep,
@@ -49,6 +52,7 @@ GetOptions(
 
 if( $entire_pipe ){
     $run_bmtagger = 1;
+    $run_deconseq = 1;
     $run_prinseq  = 1;
     $cat_reads    = 1;
     $derep        = 1;
@@ -121,6 +125,32 @@ if( $run_bmtagger ){
 		   });
 }
 
+# Deconseq
+my $deconseq_result_dir = File::Spec->catdir( $masterdir, "/deconseq/" );
+make_path( $deconseq_result_dir );
+my $deconseq_log_dir    = File::Spec->catdir( $logdir, "/deconseq/" );
+make_path( $deconseq_log_dir );
+#note that decon_db_names MUST point to a key in the deconseq perl module
+#where database locations are specified. A change the array below
+#may require revising said perl module. You can probably find the module
+#in some place like /src/deconseq-standalone-0.4.3/DeconSeqConfig.pm
+my @decon_db_names  = ( "mouse" ); 
+if( $run_deconseq ){
+    print "DECONSEQ: " . scalar(localtime()) . "\n";
+    _run_deconseq( {
+	deconseq    => $deconseq,
+	in_dir      => $bmtagger_result_dir, 
+	file_names  => \@reads, 
+	result_dir  => $deconseq_result_dir,
+	log_dir     => $deconseq_log_dir, 
+	nprocs      => $nprocs,
+	tmp_dir     => $tmp_dir,
+	db_names    => \@decon_db_names,
+	overwrite   => $overwrite,
+	paired_end  => $paired_end,
+		   });
+}
+
 # Prinseq round 1: trim and filter low quality reads
 my $prinseq_trim_result_dir = File::Spec->catdir( $masterdir, "/prinseq_trim/" );
 make_path( $prinseq_trim_result_dir );
@@ -131,7 +161,7 @@ if( $run_prinseq ){
     print "PRINSEQ, TRIM&FILTER: " . scalar(localtime()) . "\n";
     _run_prinseq( {
 	prinseq    => $prinseq,
-	in_dir     => $bmtagger_result_dir,
+	in_dir     => $deconseq_result_dir,
 	file_names => \@reads,
 	log_dir    => $prinseq_trim_log_dir,
 	result_dir => $prinseq_trim_result_dir,
@@ -232,6 +262,10 @@ if( $compress ){
 		       });
     _compress_results( { 
 	in_dir => $bmtagger_result_dir,
+	delete => 1,
+		       });
+    _compress_results( { 
+	in_dir => $deconseq_result_dir,
 	delete => 1,
 		       });
 }
@@ -464,6 +498,73 @@ sub _run_bmtagger{
     $pm->wait_all_children;    
 }
 
+sub _run_deconseq{
+    my( $args )  = @_;
+
+    my $deconseq    = $args->{ "deconseq" };
+    my $in_dir      = $args->{ "in_dir" };
+    my @reads       = @{ $args->{ "file_names" } }; 
+    my $result_dir  = $args->{ "result_dir" };
+    my $log_dir     = $args->{"log_dir"}; 
+    my $nprocs      = $args->{"nprocs"};
+    my $tmp_dir     = $args->{"tmp_dir"};
+    my @db_names    = @{ $args->{"db_names"} };
+    my $overwrite   = $args->{"overwrite"};
+    my $paired_end  = $args->{"paired_end"};
+
+    my $db_string   = join(",", @db_names );
+
+    #forward reads
+    my $pm = Parallel::ForkManager->new($nprocs);
+    for( my $i=1; $i<=$nprocs; $i++ ){
+	my $pid = $pm->start and next;
+	my $cmd;
+	#do some housekeeping
+	my $read = $reads[$i-1];
+	$read =~ s/\_R1\_/\_RX\_/; #bmtagger appends it's own mate pair id, we no longer need this one
+	my ( $f_mate, $f_out_name );
+	if( $paired_end ){
+	    $f_mate     = $read . ".bmtagged_1.fastq";
+	    $f_out_name = $read . ".deconseq_1.fastq";
+	} else {
+	    $f_mate     = $read . ".bmtagged.fastq";
+	    $f_out_name = $read . ".deconseq.fastq";
+	}
+	my( $f_in, $r_in, $f_log, $r_log );
+	$f_in  = File::Spec->catfile( $in_dir, $f_mate );
+	$f_log = File::Spec->catfile( $log_dir, $f_mate . ".log" );
+	#Start threads
+	$cmd = "$deconseq -id $f_out_name -out_dir $result_dir -f $f_in -dbs $db_string";
+	print "$cmd\n";
+	system( $cmd );
+	$pm->finish; # Terminates the child process
+    }
+    $pm->wait_all_children;    
+    #reverse reads
+    if( $paired_end ){
+	my $pm2 = Parallel::ForkManager->new($nprocs);
+	for( my $i=1; $i<=$nprocs; $i++ ){
+	    my $pid = $pm2->start and next;
+	    my $cmd;
+	    #do some housekeeping
+	    my $read = $reads[$i-1];
+	    $read =~ s/\_R1\_/\_RX\_/; #bmtagger appends it's own mate pair id, we no longer need this one
+	    my $r_mate = $read . ".bmtagged_2.fastq";
+	    my $r_out_name = $read . ".deconseq_2.fastq";
+	    #$r_mate =~ s/\_bmtagged_1\_/\_bmtagged_2\_/; #I don't think this is needed
+	    my $r_in  = File::Spec->catfile( $in_dir, $r_mate );
+	    my $r_log = File::Spec->catfile( $log_dir, $r_mate . ".log" );
+	    #Start threads
+	    $cmd = "$deconseq -id $r_out_name -out_dir $result_dir -f $r_in -dbs $db_string";
+	    print "$cmd\n";
+	    system( $cmd );
+	    $pm2->finish; # Terminates the child process
+	}
+	$pm2->wait_all_children;    
+    }
+}
+
+
 sub _run_prinseq{
     my( $args ) = @_;
 
@@ -487,12 +588,12 @@ sub _run_prinseq{
 	    $read =~ s/\_R1\_/\_RX\_/; #bmtagger appends it's own mate pair id, we no longer need this one
 	    my ( $f_mate, $r_mate );
 	    if( $paired_end ){
-		$f_mate = $read . ".bmtagged_1.fastq";
-	        $r_mate = $read . ".bmtagged_2.fastq";
-		$r_mate =~ s/\_bmtagged_1\_/\_bmtagged_2\_/;
+		$f_mate = $read . ".deconseq_1.fastq_clean.fq";
+	        $r_mate = $read . ".deconseq_2.fastq_clean.fq";
+		$r_mate =~ s/\_deconseq_1\_/\_deconseq_2\_/;
 	    } else {
-		$f_mate = $read . ".bmtagged.fastq";
-	        $r_mate = $read . ".bmtagged.fastq"; #we don't actually call this below
+		$f_mate = $read . ".deconseq.fastq";
+	        $r_mate = $read . ".deconseq.fastq"; #we don't actually call this below
 	    }
 	    my $f_in  = File::Spec->catfile( $in_dir, $f_mate );
 	    my $r_in  = File::Spec->catfile( $in_dir, $r_mate );
@@ -549,7 +650,7 @@ sub _cat_reads{
     @sorted        = map { $in_dir . "/" . $_ } @sorted;
     my @f_sorted   = ();
     my @r_sorted   = ();
-    if( $paried_end ) {
+    if( $paired_end ) {
 	@f_sorted   = map { $_ . ".trim_filter_1.fastq" } @sorted;
 	@r_sorted   = map { $_ . ".trim_filter_2.fastq" } @sorted;
     } else {
