@@ -35,13 +35,25 @@ my $compress     = 0;
 my $paired_end   = 0;
 my $entire_pipe  = 0;
 my $overwrite    = 0; #overwrite the old results?
-my $run_type;
+my $run_type = "complete"; # || "fast"
+
+#settings for bmtagger
+#my $bitmask_dir      = "/scratch/data/databases/mouse_genome_bmtagger/"; #files should end in .bitmask                                                                                       
+#my $srprism_dir      = "/scratch/data/databases/mouse_genome_bmtagger/";
+#my @db_names         = ( "Mus_musculus.NCBI.GRCm38.dna" ); #appropriate extensions (i.e., .fa, .bitmask) added below
+
+my $bitmask_dir      = "/nfs1/Sharpton_Lab/tmp/data/genomes/bmtagger_indx/";
+my $srprism_dir      = "/nfs1/Sharpton_Lab/tmp/data/genomes/bmtagger_indx/";
+my @db_names         = ( "GCA_000003205.4_Btau_4.6.1_genomic" ); #appropriate extensions (i.e., .fa, .bitmask) added below
+
+#settings for deconseq
+my @decon_db_names  = ( "cow" ); 
 
 GetOptions(
     "i=s"         => \$masterdir,
     "log-dir|l:s" => \$logdir,
     "nprocs=i"    => \$nprocs,
-    "r=s"         => \$run_type,
+    "r:s"         => \$run_type,
     "compress"    => \$compress,
     #the following options are not needed and invoked internally
     #but advanced users can use them at command line to alter
@@ -80,7 +92,7 @@ if( scalar( @reads ) < $nprocs ){
 
 print scalar(localtime()) . "\n";
 
-# FastQC
+# FastQC - not currently implemented, even in "complete"
 my $fastq_result_dir = File::Spec->catdir( $masterdir, "/fastqc_raw/" );
 make_path( $fastq_result_dir );
 my $fastq_log_dir    = File::Spec->catdir( $logdir, "/fastqc_raw/" );
@@ -131,7 +143,6 @@ if( $run_deconseq ){
 #where database locations are specified. A change the array below
 #may require revising said perl module. You can probably find the module
 #in some place like /src/deconseq-standalone-0.4.3/DeconSeqConfig.pm
-    my @decon_db_names  = ( "mouse" ); 
     
     
     print "DECONSEQ: " . scalar(localtime()) . "\n";
@@ -149,7 +160,6 @@ if( $run_deconseq ){
 		   });
 }
 
-
 # BMTagger
 if( $run_bmtagger ){
     my $bmtagger_in_dir      = File::Spec->catdir( $masterdir, $settings->{"run_bmtagger"}->{"input"});
@@ -157,9 +167,6 @@ if( $run_bmtagger ){
     make_path( $bmtagger_results_dir );
     my $bmtagger_log_dir     = File::Spec->catdir( $logdir, $settings->{"run_bmtagger"}->{"log"} );
     make_path( $bmtagger_log_dir );
-    my $bitmask_dir      = "/scratch/data/databases/mouse_genome_bmtagger/"; #files should end in .bitmask                                                                                       
-    my $srprism_dir      = "/scratch/data/databases/mouse_genome_bmtagger/";
-    my @db_names         = ( "Mus_musculus.NCBI.GRCm38.dna" ); #appropriate extensions (i.e., .fa, .bitmask) added below
     my $extract          = 1; #YOU PROBABLY WANT THIS, prints only non-host sequences in output file
 
 
@@ -223,7 +230,7 @@ if( $derep ){
 
 
 my @qc_reads = ();
-if( $run_type eq "complete"){
+if( $run_type eq "complete" || $run_type eq "fast-derep"){
     @qc_reads = @{ _get_fastq_file_names( File::Spec->catdir( $masterdir, $settings->{"derep"}->{"output"} ), 1  ) };
 } elsif( $run_type eq "fast" ){
     @qc_reads = @{ _get_fastq_file_names( File::Spec->catdir( $masterdir, $settings->{"cat_reads"}->{"output"} ), 1 ) };
@@ -372,6 +379,7 @@ sub _get_fastq_file_names{
     closedir MASTER;
     my @reads = (); 
     foreach my $read( @files ){
+	print $read . "\n";
 	#only grab the R1 reads; will add R2 later
 	if( !$is_clean_check ){
 	    next if( $read !~ m/\.fastq/ &&
@@ -510,12 +518,12 @@ sub _run_bmtagger{
 	#loop over dbs and run bmtagger
 	foreach my $db( @db_names ){
 	    my $bitmask  = File::Spec->catfile( $bitmask_dir, $db . ".bitmask" );
-	    my $srprism  = File::Spec->catfile( $sprism_dir, $db . ".srprism"  );
-	    my $database = File::Spec->catfile( $sprism_dir, $db . ".fa" );
-	    #my $f_string = "-1 " . $f_in;
-	    my $f_string = $f_in;
-	    #my $r_string = "-2 " . $r_in;
-	    my $r_string = $r_in;
+	    my $srprism  = File::Spec->catfile( $sprism_dir,  $db . ".srprism"  );
+	    my $database = File::Spec->catfile( $sprism_dir,  $db . ".fa" );
+	    my $f_string = "-1 " . $f_in;
+	    #my $f_string = $f_in;
+	    my $r_string = "-2 " . $r_in;
+	    #my $r_string = $r_in;
 	    if( $extract ){
 		#bmtagger.sh -X -b $BITMASK -x $SPRISM -T $TMP -q1 $FREAD $RREAD -o $OUTPUT  >> $LOGS/bmtagger/${JOB_ID}.all 2>&1
 #		$cmd = "run_bmtagger.sh -X -b $bitmask -x $sprism -T $tmp_dir -q1 $f_string $r_string -o $out_path > $f_log 2>&1";
@@ -760,7 +768,7 @@ sub _cat_reads{
 # setting->method->data_type
 # where method is a function name (e.g., bmtagger)
 # data_type is input, output, log, or something custom to function
-# for now, there are only two settings configured: fast and complete
+# for now, there are only three settings configured: fast, fast-derep, and complete
 sub _set_settings{
     my $setting_type = shift;   
     my ( $run_prinseq, $run_deconseq, $run_bmtagger,
@@ -769,8 +777,17 @@ sub _set_settings{
 	$run_prinseq  = 1;
 	$run_deconseq = 1;
 	$run_bmtagger = 0;
-	$cat_reads    = 1;
+	$cat_reads    = 0; #this is only needed if multiple files are produced per seq
+	                   #turning off effects $derep input...move to the top?
 	$derep        = 0;
+	$check_qc     = 1;
+	$make_fasta   = 1;
+    } elsif( $setting_type eq "fast-derep" ){
+	$run_prinseq  = 0;
+	$run_deconseq = 0;
+	$run_bmtagger = 0;
+	$cat_reads    = 0;
+	$derep        = 1;
 	$check_qc     = 1;
 	$make_fasta   = 1;
     } elsif( $setting_type eq "complete" ){
@@ -794,67 +811,61 @@ sub _set_settings{
 sub _build_settings{
     my $setting_type = shift;
     my $settings     = ();
+    my @keys = ();
     if( $setting_type eq "fast" ){
-	my @keys = qw( run_prinseq run_deconseq cat_reads check_qc make_fasta );
-	foreach my $key( @keys ){
-	    if( $key eq "run_prinseq" ){
-		$settings->{$key}->{"input"}  = "";
-		$settings->{$key}->{"output"} = "prinseq_trim";
-		$settings->{$key}->{"log"}    = "prinseq_log";
-	    } elsif( $key eq "run_deconseq" ){
-		$settings->{$key}->{"input"}  = "prinseq_trim";	       
-		$settings->{$key}->{"output"} = "deconseq";
-		$settings->{$key}->{"log"}    = "deconseq_log";
-	    } elsif( $key eq "cat_reads" ){
-		$settings->{$key}->{"input"}  = "deconseq";  
-		$settings->{$key}->{"output"} = "cat_reads";
-		$settings->{$key}->{"log"}    = "cat_reads_log";
-	    } elsif( $key eq "check_qc" ){
-		$settings->{$key}->{"input"}  = "cat_reads"; 
-		$settings->{$key}->{"output"} = "fastqc_clean";     
-		$settings->{$key}->{"log"}    = "fastqc_clean_log";
-	    } elsif( $key eq "make_fasta" ){
-		$settings->{$key}->{"input"}  = "cat_reads";
-		$settings->{$key}->{"output"} = "fasta_clean";     
-		$settings->{$key}->{"log"}    = "fasta_log";
-	    } else {
-		die( "I don't know how to process the setting key $key\n" );
-	    }
-	}
+	@keys = qw( run_prinseq run_deconseq cat_reads check_qc make_fasta ); #check_qc?
     } elsif( $setting_type eq "complete" ){
-	my @keys = qw( run_prinseq run_deconseq run_bmtagger cat_reads derep check_qc make_fasta );
-	foreach my $key( @keys ){
-	    if( $key eq "run_prinseq" ){
-		$settings->{$key}->{"input"}  = "";
-		$settings->{$key}->{"output"} = "prinseq_trim";
-		$settings->{$key}->{"log"}    = "prinseq_trim_log";
-	    } elsif( $key eq "run_deconseq" ){
-		$settings->{$key}->{"input"}  = "prinseq_trim";	       
-		$settings->{$key}->{"output"} = "deconseq";
-		$settings->{$key}->{"log"}    = "deconseq_log";
-	    } elsif( $key eq "run_bmtagger" ){
-		$settings->{$key}->{"input"}  = "deconseq";  
-		$settings->{$key}->{"output"} = "bmtagger";
-		$settings->{$key}->{"log"}    = "bmtagger_log";
-	    } elsif( $key eq "cat_reads" ){
+	@keys = qw( run_prinseq run_deconseq run_bmtagger cat_reads derep check_qc make_fasta ); #check_qc?
+    } elsif( $setting_type eq "fast-derep" ){
+	@keys = qw( run_prinseq run_deconseq cat_reads derep check_qc make_fasta ); #check_qc?
+    } else {
+	die "I don't know how to process $setting_type\n";
+    }
+    foreach my $key( @keys ){
+	if( $key eq "run_prinseq" ){
+	    $settings->{$key}->{"input"}  = "";
+	    $settings->{$key}->{"output"} = "prinseq_trim";
+	    $settings->{$key}->{"log"}    = "prinseq_trim_log";
+	} elsif( $key eq "run_deconseq" ){
+	    $settings->{$key}->{"input"}  = "prinseq_trim";	       
+	    $settings->{$key}->{"output"} = "deconseq";
+	    $settings->{$key}->{"log"}    = "deconseq_log";
+	} elsif( $key eq "run_bmtagger" ){
+	    $settings->{$key}->{"input"}  = "deconseq";  
+	    $settings->{$key}->{"output"} = "bmtagger";
+	    $settings->{$key}->{"log"}    = "bmtagger_log";
+	} elsif( $key eq "cat_reads" ){
+	    if( $setting_type eq "complete" ){
 		$settings->{$key}->{"input"}  = "bmtagger";  
-		$settings->{$key}->{"output"} = "cat_reads";
-		$settings->{$key}->{"log"}    = "cat_reads_log";
-	    } elsif( $key eq "derep" ){
-		$settings->{$key}->{"input"}  = "cat_reads";  
-		$settings->{$key}->{"output"} = "prinseq_derep";
-		$settings->{$key}->{"log"}    = "prinseq_derep_log";
-	    } elsif( $key eq "check_qc" ){
-		$settings->{$key}->{"input"}  = "prinseq_derep"; 
-		$settings->{$key}->{"output"} = "fastqc_clean";     
-		$settings->{$key}->{"log"}    = "fastqc_clean_log";
-	    } elsif( $key eq "make_fasta" ){
-		$settings->{$key}->{"input"}  = "cat_reads";
-		$settings->{$key}->{"output"} = "fasta_clean";     
-		$settings->{$key}->{"log"}    = "fasta_log";
 	    } else {
-		die( "I don't know how to process the setting key $key\n" );
+		$settings->{$key}->{"input"}  = "deconseq"; 
+	    } 
+	    $settings->{$key}->{"output"} = "cat_reads";
+	    $settings->{$key}->{"log"}    = "cat_reads_log";
+	} elsif( $key eq "derep" ){
+	    $settings->{$key}->{"input"}  = "cat_reads";  
+	    $settings->{$key}->{"output"} = "prinseq_derep";
+	    $settings->{$key}->{"log"}    = "prinseq_derep_log";
+	} elsif( $key eq "check_qc" ){
+	    if( $setting_type eq "complete" ||
+		$setting_type eq "fast-derep" ){
+		$settings->{$key}->{"input"}  = "prinseq_derep"; 
+	    } else {
+		$settings->{$key}->{"input"}  = "cat_reads";
 	    }
+	    $settings->{$key}->{"output"} = "fastqc_clean";     
+	    $settings->{$key}->{"log"}    = "fastqc_clean_log";
+	} elsif( $key eq "make_fasta" ){
+	    if( $setting_type eq "complete" ||
+		$setting_type eq "fast-derep" ){
+		$settings->{$key}->{"input"}  = "prinseq_derep"; 
+	    } else {
+		$settings->{$key}->{"input"}  = "cat_reads";
+	    }
+	    $settings->{$key}->{"output"} = "fasta_clean";     
+	    $settings->{$key}->{"log"}    = "fasta_log";
+	} else {
+	    die( "I don't know how to process the setting key $key\n" );
 	}
     }
     return $settings;
